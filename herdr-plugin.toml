@@ -1,0 +1,40 @@
+id = "twiking.1password"
+name = "1Password"
+version = "0.1.0"
+min_herdr_version = "0.9.1"
+description = "Pick a 1Password login in a popup and type its password or one-time code into the focused pane."
+platforms = ["linux", "macos"]
+
+# Bound to a key; remembers the focused pane and opens the picker popup over it
+[[actions]]
+id = "pick"
+title = "Fill a 1Password login"
+command = ["sh", "1password.sh", "open"]
+
+# Runs install.sh --configure in a popup, to set the account and other settings
+[[actions]]
+id = "configure"
+title = "Configure 1Password"
+command = ["sh", "1password.sh", "configure"]
+
+# Started by the picker in copy mode so the timer outlives the popup
+[[actions]]
+id = "clear-clipboard"
+title = "Clear a copied 1Password secret"
+command = ["sh", "1password.sh", "clear-clipboard"]
+
+[[panes]]
+id = "picker"
+title = "1Password"
+placement = "popup"
+width = "60%"
+height = "40%"
+command = ["sh", "1password.sh", "pick"]
+
+[[panes]]
+id = "configure"
+title = "Configure 1Password"
+placement = "popup"
+width = "80%"
+height = "80%"
+command = ["sh", "install.sh", "--configure"]

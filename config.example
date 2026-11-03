@@ -1,0 +1,21 @@
+# install.sh writes this file to "$(herdr plugin config-dir twiking.1password)/config";
+# copy it there to configure by hand instead. Sourced by sh.
+
+# Account shorthand, sign-in address, or ID; see `op account list`.
+# Empty uses OP_ACCOUNT, or the account you last signed in to.
+account=
+
+# Only list items from this vault. Empty lists all vaults.
+vault=
+
+# Only list items with these tags, comma-separated. Empty lists all items.
+tags=
+
+# on: copy the secret to the clipboard instead of typing it into the pane
+copy_to_clipboard=off
+
+# Seconds until a copied secret is cleared from the clipboard
+clear_after=30
+
+# on: keep the popup open after filling, to read its output
+debug=off
