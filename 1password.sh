@@ -9,8 +9,7 @@
 # clear-clipboard: wait clear_after seconds, then clear the clipboard if it still holds
 #                  the copied secret. Runs as a plugin action so it outlives the popup.
 #
-# A port of github.com/yardnsm/tmux-1password. Settings are read from the shell file
-# $HERDR_PLUGIN_CONFIG_DIR/config; see README.md.
+# Settings are read from the shell file $HERDR_PLUGIN_CONFIG_DIR/config; see README.md.
 #
 # Secrets never appear in a command line, where any process could read them from /proc:
 # they travel through pipes and builtins only, and reach the pane as a raw socket
@@ -169,7 +168,8 @@ case "$key" in
     printf 'Fetching password...'
     # The field whose purpose is the password, else the first concealed field
     secret=$(op item get "$id" --fields type=concealed --format json ${session:+--session "$session"} \
-      | jq -r '[.] + [] | flatten | (map(select(.purpose == "PASSWORD")) + .) | .[0].value // empty')
+      | jq -r 'if type == "array" then . else [.] end
+          | (first(.[] | select(.purpose == "PASSWORD")) // .[0]) | .value // empty')
     [ -n "$secret" ] || fail "That item has no password." ;;
 esac
 clear

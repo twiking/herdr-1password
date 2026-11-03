@@ -21,8 +21,8 @@ Usage: install.sh [options]
   --account ACCOUNT    1Password account shorthand, sign-in address, or ID ("" for the default)
   --vault VAULT        Only list items from this vault ("" for all vaults)
   --tags TAGS          Only list items with these comma-separated tags ("" for all items)
-  --copy on|off        Copy secrets to the clipboard instead of typing them
-  --clear-after SECS   Seconds until a copied secret is cleared
+  --fill type|copy     Type the password into the pane (default), or copy it to the clipboard
+  --clear-after SECS   With --fill copy: seconds until the clipboard is cleared (default 30)
   --key KEY            Key binding for the picker (default prefix+u)
   --no-key             Don't add a key binding
   -y, --yes            Don't ask; keep current values for settings not given
@@ -30,7 +30,20 @@ Usage: install.sh [options]
 EOF
 }
 
+if [ -t 1 ]; then
+  bold=$(printf '\033[1m') reset=$(printf '\033[0m')
+else
+  bold= reset=
+fi
+
 say() { printf '%s\n' "$*"; }
+
+# heading TITLE [LINE...]: a section title with its explanation
+heading() {
+  printf '\n%s%s%s\n' "$bold" "$1" "$reset"
+  shift
+  for line in "$@"; do say "$line"; done
+}
 warn() { printf 'warning: %s\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; finish 1; }
 
@@ -65,7 +78,13 @@ while [ $# -gt 0 ]; do
     --account) account="${2?--account needs a value}"; account_set=1; shift ;;
     --vault) vault="${2?--vault needs a value}"; vault_set=1; shift ;;
     --tags) tags="${2?--tags needs a value}"; tags_set=1; shift ;;
-    --copy) copy_to_clipboard="${2?--copy needs on or off}"; copy_set=1; shift ;;
+    --fill)
+      case "${2?--fill needs type or copy}" in
+        type) copy_to_clipboard=off ;;
+        copy) copy_to_clipboard=on ;;
+        *) printf 'error: --fill takes type or copy\n' >&2; exit 2 ;;
+      esac
+      copy_set=1; shift ;;
     --clear-after) clear_after="${2?--clear-after needs a value}"; clear_set=1; shift ;;
     --key) key="${2?--key needs a value}"; shift ;;
     --no-key) no_key=1 ;;
@@ -76,7 +95,6 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-case "${copy_to_clipboard:-off}" in on|off) ;; *) die "--copy takes on or off" ;; esac
 case "${clear_after:-30}" in ''|*[!0-9]*) die "--clear-after takes a number of seconds" ;; esac
 
 # Prompts go to the terminal even when the script itself is piped into sh
@@ -101,6 +119,10 @@ pick() {
 
 # --- Requirements ------------------------------------------------------------------
 
+say "${bold}herdr-1password$reset"
+say "Fill in passwords from 1Password without leaving Herdr: press a key, pick a"
+say "login from the list, and its password goes into the pane you were working in."
+
 herdr="${HERDR_BIN_PATH:-herdr}"
 has "$herdr" || die "herdr isn't installed; see https://herdr.dev"
 herdr_version=$("$herdr" --version | awk '{print $2}')
@@ -122,6 +144,7 @@ case "$0" in
 esac
 
 if [ "$configure_only" = 0 ]; then
+  heading "Installing the plugin"
   current=$("$herdr" plugin list --json --plugin "$plugin_id" 2>/dev/null \
     | jq -r '.result.plugins[]? | "\(.source.kind)\t\(.plugin_root)"')
   kind=$(printf '%s' "$current" | cut -f1)
@@ -174,17 +197,21 @@ fi
 debug="${cur_debug:-off}"
 
 if [ "$interactive" = 1 ]; then
-  say
-  say "Settings (enter keeps the current value, - clears it)"
+  heading "Settings" \
+    "A few questions about which logins the picker shows and how it fills them in." \
+    "Enter keeps the value shown first or in [brackets]. Change them any time by" \
+    "running install.sh --configure, or the twiking.1password.configure action in Herdr."
 fi
 
 if [ "$interactive" = 1 ] && [ "$account_set" = 0 ]; then
+  heading "1Password account" \
+    "The picker lists logins from this account. If you have only one, either choice works."
   accounts=$(op account list --format json 2>/dev/null | jq -r '.[] | "\(.url)\t\(.url)  \(.email)"')
   if [ -z "$accounts" ]; then
     warn "1Password CLI has no accounts. Turn on Settings > Developer > Integrate with 1Password CLI in the app, or run 'op account add'."
   else
     # The current choice first, so enter keeps it
-    default_line=$(printf '\t%s' "Default (OP_ACCOUNT, or the last account signed in to)")
+    default_line=$(printf '\t%s' "The default: OP_ACCOUNT, or the account you last signed in to")
     chosen=$({
       if [ -n "$account" ]; then
         printf '%s\t%s\n' "$account" "$account  (current)"
@@ -193,13 +220,15 @@ if [ "$interactive" = 1 ] && [ "$account_set" = 0 ]; then
         printf '%s  (current)\n' "$default_line"
       fi
       printf '%s\n' "$accounts" | awk -F '\t' -v cur="$account" '$1 != cur'
-    } | pick "1Password account") && account="$chosen"
-    say "Account: ${account:-default}"
+    } | pick "Choose an account") && account="$chosen"
+    say "Account: ${account:-the default}"
   fi
 fi
 
 if [ "$interactive" = 1 ] && [ "$vault_set" = 0 ]; then
-  say "Signing in to list your vaults..."
+  heading "Vault" \
+    "Show logins from all your vaults, or only from one, such as a work vault." \
+    "Asking 1Password for your vaults; it may ask you to unlock it..."
   vaults=$(op vault list --format json ${account:+--account "$account"} 2>/dev/null | jq -r '.[] | "\(.name)\t\(.name)"')
   if [ -n "$vaults" ]; then
     chosen=$({
@@ -209,34 +238,52 @@ if [ "$interactive" = 1 ] && [ "$vault_set" = 0 ]; then
         printf '\t%s  (current)\n' "All vaults"
       fi
       printf '%s\n' "$vaults" | awk -F '\t' -v cur="$vault" '$1 != cur'
-    } | pick "Only list items from") && vault="$chosen"
+    } | pick "Choose a vault") && vault="$chosen"
   else
-    warn "couldn't list vaults; type a name instead"
-    vault=$(ask "Only list items from this vault, empty for all" "$vault")
+    warn "couldn't list your vaults; type a vault name instead"
+    vault=$(ask "Vault name, empty for all vaults, - to clear" "$vault")
     [ "$vault" = - ] && vault=
   fi
-  say "Vault: ${vault:-all}"
+  say "Vault: ${vault:-all vaults}"
 fi
 
 if [ "$interactive" = 1 ] && [ "$tags_set" = 0 ]; then
-  tags=$(ask "Only list items with these tags, comma-separated, empty for all" "$tags")
+  heading "Tags" \
+    "Show only logins tagged in 1Password with these tags, comma-separated," \
+    "for example: ssh,servers. Leave empty to show every login; type - to clear."
+  tags=$(ask "Tags to show" "$tags")
   [ "$tags" = - ] && tags=
+  say "Tags: ${tags:-none, every login is shown}"
 fi
 
 if [ "$interactive" = 1 ] && [ "$copy_set" = 0 ]; then
-  if [ "$copy_to_clipboard" = on ]; then default=y; else default=n; fi
-  case $(ask "Copy secrets to the clipboard instead of typing them? (y/n)" "$default") in
-    y*|Y*) copy_to_clipboard=on ;;
-    *) copy_to_clipboard=off ;;
-  esac
+  heading "Filling in the password" \
+    "Type: the password is typed into the pane you opened the picker from, as if you" \
+    "      typed it yourself. Enter isn't pressed, so nothing is submitted until you do." \
+    "      Works anywhere you can type: sudo, ssh, a database or login prompt." \
+    "Copy: the password is copied to the clipboard for you to paste, and cleared" \
+    "      again after a number of seconds."
+  if [ "$copy_to_clipboard" = on ]; then
+    chosen=$(printf 'on\t%s\noff\t%s\n' "Copy it to the clipboard (current)" "Type it into the pane (default)" \
+      | pick "How should the password be filled in?")
+  else
+    chosen=$(printf 'off\t%s\non\t%s\n' "Type it into the pane (default, current)" "Copy it to the clipboard" \
+      | pick "How should the password be filled in?")
+  fi && copy_to_clipboard="$chosen"
+  if [ "$copy_to_clipboard" = on ] && [ "$clear_set" = 0 ]; then
+    while :; do
+      answer=$(ask "Clear the clipboard after how many seconds" "$clear_after")
+      case "$answer" in ''|*[!0-9]*) say "Please enter a number of seconds." ;; *) clear_after="$answer"; break ;; esac
+    done
+  fi
 fi
 
-if [ "$interactive" = 1 ] && [ "$clear_set" = 0 ] && [ "$copy_to_clipboard" = on ]; then
-  while :; do
-    answer=$(ask "Seconds until the clipboard is cleared" "$clear_after")
-    case "$answer" in ''|*[!0-9]*) say "A number of seconds, please." ;; *) clear_after="$answer"; break ;; esac
-  done
+if [ "$copy_to_clipboard" = on ]; then
+  filling="copied to the clipboard, cleared after ${clear_after}s"
+else
+  filling="typed into the pane"
 fi
+[ "$interactive" = 1 ] && [ "$copy_set" = 0 ] && say "Passwords are $filling."
 
 umask 077
 cat > "$config.tmp" <<EOF
@@ -253,7 +300,7 @@ vault=$(q "$vault")
 # Only list items with these tags, comma-separated. Empty lists all items.
 tags=$(q "$tags")
 
-# on: copy the secret to the clipboard instead of typing it into the pane
+# off: type the secret into the pane. on: copy it to the clipboard instead.
 copy_to_clipboard=$copy_to_clipboard
 
 # Seconds until a copied secret is cleared from the clipboard
@@ -263,33 +310,50 @@ clear_after=$clear_after
 debug=$debug
 EOF
 mv "$config.tmp" "$config" || die "couldn't write $config"
-say "Saved $config."
 
 # --- Key binding -------------------------------------------------------------------
 
 herdr_config="${HERDR_CONFIG_PATH:-${XDG_CONFIG_HOME:-$HOME/.config}/herdr/config.toml}"
+prefix=$(sed -n 's/^prefix *= *"\(.*\)".*/\1/p' "$herdr_config" 2>/dev/null | head -n 1)
+prefix="${prefix:-ctrl+b}"
+
+# The key of an existing binding: the last key line before the line naming the action
+bound=$(awk -v cmd="\"$plugin_id.pick\"" '
+  /^[[:space:]]*key[[:space:]]*=/ { k = $0; sub(/^[^"]*"/, "", k); sub(/".*/, "", k) }
+  index($0, cmd) && /^[[:space:]]*command[[:space:]]*=/ { print k; exit }' "$herdr_config" 2>/dev/null)
 
 if [ "$no_key" = 1 ]; then
-  :
-elif grep -q "\"$plugin_id.pick\"" "$herdr_config" 2>/dev/null; then
-  say "The picker already has a key binding in $herdr_config."
+  key=
+elif [ -n "$bound" ]; then
+  key="$bound"
+  if [ "$interactive" = 1 ]; then
+    heading "Key binding" \
+      "The picker opens with $bound. To change it, edit the twiking.1password.pick" \
+      "binding in $herdr_config."
+  fi
 else
   key="${key:-prefix+u}"
+  if [ "$interactive" = 1 ]; then
+    heading "Key binding" \
+      "The key that opens the picker in Herdr. prefix+u means: press your Herdr prefix" \
+      "($prefix), let go, then press u. Type - to skip; you can bind the" \
+      "twiking.1password.pick action yourself later."
+  fi
   suggested="$key"
   while [ "$interactive" = 1 ]; do
-    key=$(ask "Key to open the picker, - for none" "$suggested")
+    key=$(ask "Key" "$suggested")
     [ "$key" = - ] && break
     # Bindings set in config.toml, and Herdr's defaults, which it lists commented out
     used=$( { grep -v '^[[:space:]]*#' "$herdr_config" 2>/dev/null; "$herdr" --default-config | sed -n 's/^# *\([a-z_]* *= *\)/\1/p'; } \
       | grep -F "\"$key\"" | head -n 3)
     [ -z "$used" ] && break
-    say "$key may already be taken:"
+    say "$key may already be used by:"
     printf '  %s\n' "$used"
     case $(ask "Use it anyway? (y/n)" n) in y*|Y*) break ;; esac
   done
 
   case "$key" in
-    -) ;;
+    -) key= ;;
     *[\"\\]*) die "not a valid key: $key" ;;
     *)
       mkdir -p "$(dirname "$herdr_config")"
@@ -313,15 +377,25 @@ EOF
         if [ -n "$backup" ]; then mv "$backup" "$herdr_config"; else rm -f "$herdr_config"; fi
         die "herdr rejected the key binding; $herdr_config is unchanged"
       fi
-      say "Bound $key in $herdr_config${backup:+ (backup: $backup)}."
+      say "Added the binding to $herdr_config${backup:+ (backup: $backup)}."
+      "$herdr" server reload-config >/dev/null 2>&1
       ;;
   esac
 fi
 
-if "$herdr" server reload-config >/dev/null 2>&1; then
-  say "Reloaded herdr's config."
-fi
+# --- Summary -----------------------------------------------------------------------
 
+heading "Done"
+say "  Account   ${account:-the default}"
+say "  Vault     ${vault:-all vaults}"
+say "  Tags      ${tags:-none}"
+say "  Password  $filling"
+say "  Key       ${key:-none}"
 say
-say "Done. Press the key in herdr to fill a login: enter types the password, ctrl-u the one-time password."
+say "Settings are saved in $config."
+if [ -n "$key" ]; then
+  if [ "$copy_to_clipboard" = on ]; then verb=copies; else verb=types; fi
+  say "In Herdr, press $key, pick a login, and press enter: the picker $verb its password."
+  say "Press ctrl-u instead for its one-time password, or esc to cancel."
+fi
 finish 0

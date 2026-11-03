@@ -1,8 +1,10 @@
 # herdr-1password
 
-A [Herdr](https://herdr.dev) plugin that fills 1Password logins into a pane, ported from [tmux-1password](https://github.com/yardnsm/tmux-1password).
+A [Herdr](https://herdr.dev) plugin that fills 1Password logins into a pane.
 
-Press the key and a popup lists your Login and Password items. Pick one with `enter` to type its password into the pane you were in, or with `ctrl-u` to type its one-time password. Nothing is submitted; press enter yourself.
+Press the key and a popup lists your 1Password logins. Pick one with `enter` and its password is typed into the pane you were working in, as if you typed it yourself; `ctrl-u` types its one-time password instead. Enter is never pressed for you, so nothing is submitted until you do. This works anywhere you can type: `sudo`, `ssh`, a database or login prompt.
+
+If you'd rather paste, the password can be copied to the clipboard instead, and cleared again after 30 seconds.
 
 ## Requirements
 
@@ -18,14 +20,15 @@ Press the key and a popup lists your Login and Password items. Pick one with `en
 curl -fsSL https://raw.githubusercontent.com/twiking/herdr-1password/main/install.sh | sh
 ```
 
-The installer checks the requirements, installs the plugin with `herdr plugin install twiking/herdr-1password`, then asks for your settings:
+The installer checks the requirements and installs the plugin with `herdr plugin install twiking/herdr-1password`. It then walks you through the settings, explaining each one:
 
-- which 1Password account and vault to use
-- which tags to filter on
-- whether to copy to the clipboard instead of typing
-- a key binding, `prefix+u` by default
+- **1Password account**: which account to list logins from
+- **Vault**: all vaults, or only one
+- **Tags**: only show logins with these tags
+- **Filling in the password**: type it into the pane (the default), or copy it to the clipboard
+- **Key binding**: the key that opens the picker, `prefix+u` by default
 
-It adds the binding to Herdr's `config.toml`, keeping a backup, and reloads the config.
+It adds the key binding to Herdr's `config.toml`, keeping a backup, and ends with a summary of what it saved.
 
 Or install with Herdr directly and configure from inside it:
 
@@ -55,8 +58,8 @@ curl -fsSL https://raw.githubusercontent.com/twiking/herdr-1password/main/instal
 | `--account ACCOUNT` | Account shorthand, sign-in address, or ID; `""` for the default |
 | `--vault VAULT` | Only list items from this vault; `""` for all vaults |
 | `--tags TAGS` | Only list items with these comma-separated tags; `""` for all items |
-| `--copy on\|off` | Copy secrets to the clipboard instead of typing them |
-| `--clear-after SECS` | Seconds until a copied secret is cleared |
+| `--fill type\|copy` | Type the password into the pane (default), or copy it to the clipboard |
+| `--clear-after SECS` | With `--fill copy`: seconds until the clipboard is cleared (default 30) |
 | `--key KEY` | Key binding for the picker |
 | `--no-key` | Don't add a key binding |
 | `-y`, `--yes` | Don't ask |
@@ -69,16 +72,16 @@ With the 1Password app's [CLI integration](https://developer.1password.com/docs/
 
 Settings live in `$(herdr plugin config-dir twiking.1password)/config`, a shell file the installer writes. You can also edit it by hand; see [`config.example`](config.example).
 
-| Setting | Default | tmux-1password option |
+| Setting | Default | |
 |---|---|---|
-| `account` | `OP_ACCOUNT`, or the last account signed in to | `@1password-account` |
-| `vault` | all vaults | `@1password-vault` |
-| `tags` | no filter | `@1password-filter-tags` |
-| `copy_to_clipboard` | `off` | `@1password-copy-to-clipboard` |
-| `clear_after` | `30` seconds | (fixed at 30) |
-| `debug` | `off` | `@1password-debug` |
+| `account` | `OP_ACCOUNT`, or the last account signed in to | Account shorthand, sign-in address, or ID to list logins from |
+| `vault` | all vaults | Only list logins from this vault |
+| `tags` | no filter | Only list logins with these comma-separated tags |
+| `copy_to_clipboard` | `off` | `off` types the password into the pane; `on` copies it to the clipboard instead |
+| `clear_after` | `30` | Seconds until a copied password is cleared from the clipboard |
+| `debug` | `off` | `on` keeps the popup open after filling, to read its output |
 
-The key binding lives in Herdr's `config.toml` rather than `@1password-key`:
+The key binding lives in Herdr's `config.toml`:
 
 ```toml
 [[keys.command]]
@@ -88,13 +91,12 @@ command = "twiking.1password.pick"
 description = "Fill a 1Password login"
 ```
 
-## Differences from tmux-1password
+## Security
 
-- The picker is a popup over the pane, not a split under it.
-- Each row shows the username and vault. Items are picked by ID, so items with the same title, or with commas in it, work.
-- Secrets never appear in a command line, where other processes could read them from `/proc`. They are typed through a raw `pane.send_text` socket request rather than `herdr pane send-text`.
-- Items without a field marked as the password fall back to their first concealed field.
+- Secrets never appear in a command line, where other processes could read them from `/proc`. They travel through pipes, and are typed through a raw `pane.send_text` socket request rather than `herdr pane send-text`.
+- Typing never presses enter, so nothing is submitted until you do.
 - In copy mode, the clipboard is cleared only if it still holds the secret, and Wayland clipboard managers are told it is sensitive.
+- The session token for accounts signed in without the app is kept in `$XDG_RUNTIME_DIR`, which is private to you and wiped at logout.
 
 ## Actions
 
@@ -110,4 +112,4 @@ If something fails, the popup stays open to show the error. Set `debug=on` to ke
 
 ## License
 
-[MIT](LICENSE). The approach and the original shell code come from [tmux-1password](https://github.com/yardnsm/tmux-1password) by Yarden Sod-Moriah, also MIT.
+[MIT](LICENSE)
